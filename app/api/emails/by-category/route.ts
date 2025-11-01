@@ -13,13 +13,30 @@ export async function GET(request: NextRequest) {
 
     const { searchParams } = new URL(request.url);
     const categoryId = searchParams.get('categoryId');
+    const priority = searchParams.get('priority'); // 'high', 'medium', 'low'
+    const important = searchParams.get('important'); // 'true' or 'false'
 
     const where: any = {
       isDeleted: false,
     };
 
+    // Category filter
     if (categoryId && categoryId !== 'all') {
       where.categoryId = categoryId;
+    }
+
+    // Priority filter
+    if (priority === 'high') {
+      where.aiPriorityScore = { gte: 70 };
+    } else if (priority === 'medium') {
+      where.aiPriorityScore = { gte: 40, lt: 70 };
+    } else if (priority === 'low') {
+      where.aiPriorityScore = { lt: 40 };
+    }
+
+    // Important info filter
+    if (important === 'true') {
+      where.hasImportantInfo = true;
     }
 
     const emails = await prisma.email.findMany({

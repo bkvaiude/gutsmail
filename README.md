@@ -1,6 +1,10 @@
-# Email Intelligence - AI-Powered Email Management
+# GutsMail - AI-Powered Email Intelligence
+
+**by Highguts Solutions LLP**
 
 An intelligent email sorting and management application that uses Google Gemini AI to automatically categorize, summarize, and analyze your emails.
+
+🌐 **Website**: [highguts.com](https://highguts.com)
 
 ## Features
 
@@ -41,7 +45,7 @@ An intelligent email sorting and management application that uses Google Gemini 
 
 ```bash
 git clone <your-repo-url>
-cd email-ai
+cd gutsmail
 npm install
 ```
 

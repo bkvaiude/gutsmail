@@ -53,6 +53,40 @@ export async function getGmailClient(userId: string) {
   return google.gmail({ version: 'v1', auth: oauth2Client });
 }
 
+// Create Gmail client from a GmailAccount object (for multi-account support)
+export async function getGmailClientFromAccount(gmailAccount: {
+  id: string;
+  accessToken: string;
+  refreshToken: string | null;
+  expiresAt: number | null;
+}) {
+  const oauth2Client = new google.auth.OAuth2(
+    process.env.GOOGLE_CLIENT_ID,
+    process.env.GOOGLE_CLIENT_SECRET
+  );
+
+  oauth2Client.setCredentials({
+    access_token: gmailAccount.accessToken,
+    refresh_token: gmailAccount.refreshToken,
+  });
+
+  // Handle token refresh
+  oauth2Client.on('tokens', async (tokens) => {
+    if (tokens.refresh_token && tokens.access_token) {
+      await prisma.gmailAccount.update({
+        where: { id: gmailAccount.id },
+        data: {
+          accessToken: tokens.access_token,
+          refreshToken: tokens.refresh_token,
+          expiresAt: tokens.expiry_date ? Math.floor(tokens.expiry_date / 1000) : null,
+        },
+      });
+    }
+  });
+
+  return google.gmail({ version: 'v1', auth: oauth2Client });
+}
+
 function decodeBase64(str: string): string {
   try {
     return Buffer.from(str, 'base64').toString('utf-8');
@@ -105,7 +139,15 @@ export async function fetchRecentEmails(
   query = 'in:inbox'
 ): Promise<GmailMessage[]> {
   const gmail = await getGmailClient(userId);
+  return fetchRecentEmailsFromClient(gmail, maxResults, query);
+}
 
+// Fetch emails using a Gmail client directly (for multi-account support)
+export async function fetchRecentEmailsFromClient(
+  gmail: any,
+  maxResults = 20,
+  query = 'in:inbox'
+): Promise<GmailMessage[]> {
   const response = await gmail.users.messages.list({
     userId: 'me',
     maxResults,
@@ -149,7 +191,11 @@ export async function fetchRecentEmails(
 
 export async function archiveEmail(userId: string, messageId: string): Promise<void> {
   const gmail = await getGmailClient(userId);
+  return archiveEmailWithClient(gmail, messageId);
+}
 
+// Archive email using a Gmail client directly (for multi-account support)
+export async function archiveEmailWithClient(gmail: any, messageId: string): Promise<void> {
   await gmail.users.messages.modify({
     userId: 'me',
     id: messageId,
@@ -171,15 +217,47 @@ export async function deleteEmail(userId: string, messageId: string): Promise<vo
 export async function extractUnsubscribeLink(body: string, htmlBody?: string): Promise<string | null> {
   const text = htmlBody || body;
 
-  // Common patterns for unsubscribe links
-  const patterns = [
+  // Strategy 1: Parse HTML anchor tags with unsubscribe-related text
+  if (htmlBody) {
+    // Look for anchor tags with unsubscribe-related text
+    const anchorPattern = /<a[^>]+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
+    const unsubscribeKeywords = [
+      'unsubscribe',
+      'opt-out',
+      'opt out',
+      'optout',
+      'preferences',
+      'manage preferences',
+      'email preferences',
+      'subscription',
+      'manage subscription',
+    ];
+
+    let match;
+    while ((match = anchorPattern.exec(htmlBody)) !== null) {
+      const href = match[1];
+      const linkText = match[2].replace(/<[^>]*>/g, '').toLowerCase(); // Remove inner HTML tags and lowercase
+
+      // Check if the link text contains any unsubscribe keywords
+      if (unsubscribeKeywords.some(keyword => linkText.includes(keyword))) {
+        // Clean up the href
+        const cleanHref = href.replace(/&amp;/g, '&').trim();
+        if (cleanHref.startsWith('http')) {
+          return cleanHref;
+        }
+      }
+    }
+  }
+
+  // Strategy 2: Look for URLs with unsubscribe keywords in the URL itself (fallback)
+  const urlPatterns = [
     /https?:\/\/[^\s<>"]+unsubscribe[^\s<>"]*/gi,
     /https?:\/\/[^\s<>"]+optout[^\s<>"]*/gi,
     /https?:\/\/[^\s<>"]+opt-out[^\s<>"]*/gi,
     /https?:\/\/[^\s<>"]+preferences[^\s<>"]*/gi,
   ];
 
-  for (const pattern of patterns) {
+  for (const pattern of urlPatterns) {
     const match = text.match(pattern);
     if (match) {
       return match[0].replace(/[)>\]]+$/, ''); // Clean up trailing characters

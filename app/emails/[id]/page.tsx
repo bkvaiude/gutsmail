@@ -1,8 +1,9 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { use, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useSession } from 'next-auth/react';
+import toast from 'react-hot-toast';
 
 interface Email {
   id: string;
@@ -21,11 +22,12 @@ interface Email {
   unsubscribeLink?: string;
 }
 
-export default function EmailDetail({ params }: { params: { id: string } }) {
+export default function EmailDetail({ params }: { params: Promise<{ id: string }> }) {
   const router = useRouter();
   const { status } = useSession();
   const [email, setEmail] = useState<Email | null>(null);
   const [loading, setLoading] = useState(true);
+  const { id } = use(params);
 
   useEffect(() => {
     if (status === 'unauthenticated') {
@@ -33,20 +35,21 @@ export default function EmailDetail({ params }: { params: { id: string } }) {
     } else if (status === 'authenticated') {
       loadEmail();
     }
-  }, [status, params.id]);
+  }, [status, id]);
 
   const loadEmail = async () => {
     try {
-      const res = await fetch(`/api/emails/${params.id}`);
+      const res = await fetch(`/api/emails/${id}`);
       if (res.ok) {
         const data = await res.json();
         setEmail(data);
       } else {
-        alert('Email not found');
+        toast.error('Email not found');
         router.push('/dashboard');
       }
     } catch (error) {
       console.error('Error loading email:', error);
+      toast.error('Failed to load email');
     } finally {
       setLoading(false);
     }

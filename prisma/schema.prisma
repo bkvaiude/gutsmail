@@ -6,7 +6,7 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
@@ -51,6 +51,7 @@ model User {
   categories     Category[]
   insights       EmailInsight[]
   senderProfiles SenderProfile[]
+  gmailAccounts  GmailAccount[]
 }
 
 model VerificationToken {
@@ -80,6 +81,7 @@ model Category {
 model Email {
   id              String   @id @default(cuid())
   categoryId      String?
+  gmailAccountId  String?
   messageId       String   @unique
   threadId        String
   subject         String
@@ -103,9 +105,11 @@ model Email {
 
   createdAt DateTime @default(now())
 
-  category Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  category     Category?     @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  gmailAccount GmailAccount? @relation(fields: [gmailAccountId], references: [id], onDelete: SetNull)
 
   @@index([categoryId])
+  @@index([gmailAccountId])
   @@index([date])
   @@index([from])
 }
@@ -126,6 +130,7 @@ model EmailInsight {
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  @@unique([userId, date])
   @@index([userId, date])
 }
 
@@ -151,4 +156,24 @@ model SenderProfile {
 
   @@unique([userId, email])
   @@index([userId])
+}
+
+// Gmail Account Management for Multi-Account Support
+model GmailAccount {
+  id            String   @id @default(cuid())
+  userId        String
+  email         String
+  accessToken   String
+  refreshToken  String?
+  expiresAt     Int?
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  emails Email[]
+
+  @@unique([userId, email])
+  @@index([userId])
+  @@index([userId, isActive])
 }

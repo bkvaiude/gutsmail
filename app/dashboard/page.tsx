@@ -3,6 +3,7 @@
 import { useSession, signOut } from 'next-auth/react';
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import toast from 'react-hot-toast';
 
 interface Category {
   id: string;
@@ -24,25 +25,57 @@ interface Email {
   category?: { id: string; name: string; color: string };
 }
 
+interface Stats {
+  total: number;
+  priorities: {
+    high: number;
+    medium: number;
+    low: number;
+  };
+  importantInfo: number;
+  byCategory: Record<string, {
+    name: string;
+    high: number;
+    medium: number;
+    low: number;
+    important: number;
+    total: number;
+  }>;
+}
+
+interface GmailAccount {
+  id: string;
+  email: string;
+  isActive: boolean;
+  createdAt: string;
+}
+
 export default function Dashboard() {
   const { data: session, status } = useSession();
   const router = useRouter();
   const [categories, setCategories] = useState<Category[]>([]);
   const [emails, setEmails] = useState<Email[]>([]);
+  const [stats, setStats] = useState<Stats | null>(null);
+  const [gmailAccounts, setGmailAccounts] = useState<GmailAccount[]>([]);
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
+  const [selectedPriority, setSelectedPriority] = useState<string>(''); // 'high', 'medium', 'low', or ''
+  const [selectedImportant, setSelectedImportant] = useState<boolean>(false);
   const [selectedEmails, setSelectedEmails] = useState<Set<string>>(new Set());
   const [showNewCategory, setShowNewCategory] = useState(false);
   const [loading, setLoading] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
   useEffect(() => {
     if (status === 'unauthenticated') {
       router.push('/auth/signin');
     } else if (status === 'authenticated') {
       loadCategories();
+      loadStats();
       loadEmails();
+      loadGmailAccounts();
     }
-  }, [status, selectedCategory]);
+  }, [status, selectedCategory, selectedPriority, selectedImportant]);
 
   const loadCategories = async () => {
     try {
@@ -56,12 +89,46 @@ export default function Dashboard() {
     }
   };
 
+  const loadStats = async () => {
+    try {
+      const res = await fetch('/api/emails/stats');
+      if (res.ok) {
+        const data = await res.json();
+        setStats(data);
+      }
+    } catch (error) {
+      console.error('Error loading stats:', error);
+    }
+  };
+
+  const loadGmailAccounts = async () => {
+    try {
+      const res = await fetch('/api/gmail-accounts');
+      if (res.ok) {
+        const data = await res.json();
+        setGmailAccounts(data);
+      }
+    } catch (error) {
+      console.error('Error loading Gmail accounts:', error);
+    }
+  };
+
   const loadEmails = async () => {
     try {
       setLoading(true);
-      const url = selectedCategory === 'all'
-        ? '/api/emails/by-category'
-        : `/api/emails/by-category?categoryId=${selectedCategory}`;
+      const params = new URLSearchParams();
+
+      if (selectedCategory !== 'all') {
+        params.append('categoryId', selectedCategory);
+      }
+      if (selectedPriority) {
+        params.append('priority', selectedPriority);
+      }
+      if (selectedImportant) {
+        params.append('important', 'true');
+      }
+
+      const url = `/api/emails/by-category${params.toString() ? '?' + params.toString() : ''}`;
       const res = await fetch(url);
       if (res.ok) {
         const data = await res.json();
@@ -84,13 +151,14 @@ export default function Dashboard() {
       });
       if (res.ok) {
         const data = await res.json();
-        alert(`Imported ${data.imported} emails, skipped ${data.skipped}`);
+        toast.success(`Imported ${data.imported} emails, skipped ${data.skipped}`);
         loadEmails();
         loadCategories();
+        loadStats();
       }
     } catch (error) {
       console.error('Error importing:', error);
-      alert('Failed to import emails');
+      toast.error('Failed to import emails');
     } finally {
       setImporting(false);
     }
@@ -102,6 +170,7 @@ export default function Dashboard() {
     const emailIds = Array.from(selectedEmails);
 
     // AI Safety check
+    toast.loading('AI analyzing emails for safety...', { id: 'analyzing' });
     const analyzeRes = await fetch('/api/emails/bulk-analyze', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -110,11 +179,19 @@ export default function Dashboard() {
 
     if (analyzeRes.ok) {
       const analysis = await analyzeRes.json();
+      toast.dismiss('analyzing');
 
       if (analysis.shouldReview.length > 0) {
         const message = `AI Safety Check:\n\n${analysis.shouldReview.length} emails flagged for review:\n${analysis.shouldReview.slice(0, 5).map((e: any) => `- ${e.reason}`).join('\n')}\n\nProceed with deletion?`;
-        if (!confirm(message)) return;
+        if (!confirm(message)) {
+          toast('Deletion cancelled');
+          return;
+        }
+      } else {
+        toast.success('All emails safe to delete');
       }
+    } else {
+      toast.dismiss('analyzing');
     }
 
     const res = await fetch('/api/emails/bulk-delete', {
@@ -125,7 +202,7 @@ export default function Dashboard() {
 
     if (res.ok) {
       const data = await res.json();
-      alert(`Deleted ${data.deleted} emails`);
+      toast.success(`Deleted ${data.deleted} emails`);
       setSelectedEmails(new Set());
       loadEmails();
     }
@@ -137,7 +214,7 @@ export default function Dashboard() {
     const res = await fetch('/api/emails/unsubscribe', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ emailIds: Array.from(selectedEmails) }),
+      body: JSON.stringify({ emailIds: Array.from(selectedEmails), useAI: false }),
     });
 
     if (res.ok) {
@@ -146,10 +223,37 @@ export default function Dashboard() {
         data.links.forEach((link: any) => {
           window.open(link.link, '_blank');
         });
-        alert(`Opened ${data.count} unsubscribe links in new tabs`);
+        toast.success(`Opened ${data.count} unsubscribe links in new tabs`);
       } else {
-        alert('No unsubscribe links found in selected emails');
+        toast('No unsubscribe links found in selected emails');
       }
+    }
+  };
+
+  const handleAIUnsubscribe = async () => {
+    if (selectedEmails.size === 0) return;
+
+    toast('Starting AI unsubscribe agent... This may take a few minutes', { duration: 5000 });
+
+    const res = await fetch('/api/emails/unsubscribe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ emailIds: Array.from(selectedEmails), useAI: true }),
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      if (data.count > 0) {
+        const successMsg = `AI Unsubscribe Complete!\n✅ Successful: ${data.successCount}\n❌ Failed: ${data.failCount}\n📧 Total: ${data.count}`;
+        toast.success(successMsg);
+
+        // Show detailed results in console
+        console.log('AI Unsubscribe Results:', data.results);
+      } else {
+        toast('No unsubscribe links found in selected emails');
+      }
+    } else {
+      toast.error('Failed to run AI unsubscribe agent');
     }
   };
 
@@ -161,6 +265,59 @@ export default function Dashboard() {
       newSelected.add(id);
     }
     setSelectedEmails(newSelected);
+  };
+
+  const handleConnectAccount = async () => {
+    try {
+      const res = await fetch('/api/gmail-accounts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      if (res.ok) {
+        toast.success('Gmail account connected');
+        loadGmailAccounts();
+      } else {
+        const error = await res.json();
+        toast.error(error.error || 'Failed to connect account');
+      }
+    } catch (error) {
+      console.error('Error connecting account:', error);
+      toast.error('Failed to connect account');
+    }
+  };
+
+  const handleToggleAccount = async (id: string, isActive: boolean) => {
+    try {
+      const res = await fetch(`/api/gmail-accounts/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ isActive }),
+      });
+      if (res.ok) {
+        toast.success(isActive ? 'Account activated' : 'Account deactivated');
+        loadGmailAccounts();
+      }
+    } catch (error) {
+      console.error('Error toggling account:', error);
+      toast.error('Failed to update account');
+    }
+  };
+
+  const handleRemoveAccount = async (id: string) => {
+    if (!confirm('Are you sure you want to remove this Gmail account?')) return;
+
+    try {
+      const res = await fetch(`/api/gmail-accounts/${id}`, {
+        method: 'DELETE',
+      });
+      if (res.ok) {
+        toast.success('Account removed');
+        loadGmailAccounts();
+      }
+    } catch (error) {
+      console.error('Error removing account:', error);
+      toast.error('Failed to remove account');
+    }
   };
 
   const selectAll = () => {
@@ -176,11 +333,23 @@ export default function Dashboard() {
   }
 
   return (
-    <div className="flex h-screen bg-white">
-      {/* Sidebar */}
-      <div className="w-64 bg-[#f8f9fa] border-r border-[#dadce0] flex flex-col">
+    <div className="h-screen bg-white overflow-hidden">
+      <div className="flex h-full relative overflow-hidden">
+        {/* Mobile Overlay Backdrop */}
+        {isSidebarOpen && (
+          <div
+            className="fixed inset-0 bg-black bg-opacity-50 z-30 lg:hidden"
+            onClick={() => setIsSidebarOpen(false)}
+          />
+        )}
+
+        {/* Sidebar */}
+        <div className={`fixed lg:static w-64 lg:w-80 h-full flex-shrink-0 bg-[#f8f9fa] border-r border-[#dadce0] flex flex-col z-40 transition-transform duration-300 ease-in-out ${
+          isSidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'
+        }`}>
         <div className="p-4">
-          <h1 className="text-xl font-normal text-gray-900">Email Intelligence</h1>
+          <h1 className="text-xl font-normal text-gray-900">GutsMail</h1>
+          <p className="text-xs text-gray-500 mt-0.5">by Highguts Solutions</p>
         </div>
 
         <div className="px-4 pb-4">
@@ -193,33 +362,143 @@ export default function Dashboard() {
           </button>
         </div>
 
-        <nav className="flex-1 px-2 overflow-y-auto">
+        <nav className="flex-1 px-2 overflow-y-auto overflow-x-hidden">
           <button
-            onClick={() => setSelectedCategory('all')}
-            className={`w-full text-left px-4 py-2 rounded-r text-sm ${
-              selectedCategory === 'all'
+            onClick={() => {
+              setSelectedCategory('all');
+              setSelectedPriority('');
+              setSelectedImportant(false);
+              setIsSidebarOpen(false);
+            }}
+            className={`w-full text-left px-4 py-1.5 lg:py-2 rounded-r text-sm ${
+              selectedCategory === 'all' && !selectedPriority && !selectedImportant
                 ? 'bg-[#e8f0fe] text-[#1a73e8]'
                 : 'hover:bg-gray-200 text-gray-700'
             }`}
           >
-            All Mail ({emails.length})
+            All Mail ({stats?.total || 0})
           </button>
 
           <button
-            onClick={() => router.push('/insights')}
-            className="w-full text-left px-4 py-2 rounded-r text-sm hover:bg-gray-200 text-gray-700"
+            onClick={() => {
+              router.push('/insights');
+              setIsSidebarOpen(false);
+            }}
+            className="w-full text-left px-4 py-1.5 lg:py-2 rounded-r text-sm hover:bg-gray-200 text-gray-700"
           >
             Insights Dashboard
           </button>
 
-          <div className="mt-4 px-4 text-xs text-gray-600 font-medium">CATEGORIES</div>
+          {/* CONNECTED ACCOUNTS Section */}
+          <div className="mt-3 lg:mt-4 px-4 text-xs text-gray-600 font-medium">CONNECTED ACCOUNTS</div>
+
+          {gmailAccounts.length === 0 ? (
+            <div className="px-4 py-2 text-sm text-gray-500">
+              No accounts connected
+            </div>
+          ) : (
+            gmailAccounts.map((account) => (
+              <div
+                key={account.id}
+                className="w-full px-4 py-1.5 lg:py-2 text-sm flex items-center justify-between"
+              >
+                <div className="flex items-center gap-2 flex-1 min-w-0">
+                  <input
+                    type="checkbox"
+                    checked={account.isActive}
+                    onChange={(e) => handleToggleAccount(account.id, e.target.checked)}
+                    className="flex-shrink-0"
+                  />
+                  <span className="truncate text-gray-700">{account.email}</span>
+                </div>
+                <button
+                  onClick={() => handleRemoveAccount(account.id)}
+                  className="ml-2 text-red-600 hover:text-red-800 flex-shrink-0"
+                  title="Remove account"
+                >
+                  ✕
+                </button>
+              </div>
+            ))
+          )}
+
+          <button
+            onClick={handleConnectAccount}
+            className="w-full text-left px-4 py-1.5 lg:py-2 rounded-r text-sm text-[#1a73e8] hover:bg-gray-200"
+          >
+            + Connect Account
+          </button>
+
+          {/* PRIORITIES Section */}
+          <div className="mt-3 lg:mt-4 px-4 text-xs text-gray-600 font-medium">PRIORITIES</div>
+
+          <div className="flex flex-col lg:flex-row lg:items-center lg:gap-2 lg:flex-wrap px-2 lg:px-4 py-1 min-h-[40px] lg:min-h-[36px]">
+            <button
+              onClick={() => {
+                setSelectedCategory('all');
+                setSelectedPriority('high');
+                setSelectedImportant(false);
+                setIsSidebarOpen(false);
+              }}
+              title="High Priority"
+              className={`px-4 py-1.5 lg:px-3 lg:py-1 rounded text-sm ${
+                selectedPriority === 'high'
+                  ? 'bg-[#e8f0fe] text-[#1a73e8]'
+                  : 'hover:bg-gray-200 text-gray-700'
+              }`}
+            >
+              🔴 ({stats?.priorities.high || 0}{stats?.priorities.high && stats.priorities.high > 99 ? '+' : ''})
+            </button>
+
+            <button
+              onClick={() => {
+                setSelectedCategory('all');
+                setSelectedPriority('medium');
+                setSelectedImportant(false);
+                setIsSidebarOpen(false);
+              }}
+              title="Medium Priority"
+              className={`px-4 py-1.5 lg:px-3 lg:py-1 rounded text-sm ${
+                selectedPriority === 'medium'
+                  ? 'bg-[#e8f0fe] text-[#1a73e8]'
+                  : 'hover:bg-gray-200 text-gray-700'
+              }`}
+            >
+              🟡 ({stats?.priorities.medium || 0}{stats?.priorities.medium && stats.priorities.medium > 99 ? '+' : ''})
+            </button>
+
+            <button
+              onClick={() => {
+                setSelectedCategory('all');
+                setSelectedPriority('low');
+                setSelectedImportant(false);
+                setIsSidebarOpen(false);
+              }}
+              title="Low Priority"
+              className={`px-4 py-1.5 lg:px-3 lg:py-1 rounded text-sm ${
+                selectedPriority === 'low'
+                  ? 'bg-[#e8f0fe] text-[#1a73e8]'
+                  : 'hover:bg-gray-200 text-gray-700'
+              }`}
+            >
+              🟢 ({stats?.priorities.low || 0}{stats?.priorities.low && stats.priorities.low > 99 ? '+' : ''})
+            </button>
+          </div>
+
+          {/* CATEGORIES Section */}
+          <div className="mt-3 lg:mt-4 px-4 text-xs text-gray-600 font-medium">CATEGORIES</div>
 
           {categories.map((cat) => (
             <button
               key={cat.id}
-              onClick={() => setSelectedCategory(cat.id)}
-              className={`w-full text-left px-4 py-2 rounded-r text-sm flex items-center justify-between ${
-                selectedCategory === cat.id
+              onClick={() => {
+                setSelectedCategory(cat.id);
+                setSelectedPriority('');
+                setSelectedImportant(false);
+                setIsSidebarOpen(false);
+              }}
+              className={`w-full text-left px-4 py-1.5 lg:py-2 rounded-r text-sm flex items-center justify-between ${
+                selectedCategory === cat.id && !selectedPriority && !selectedImportant
                   ? 'bg-[#e8f0fe] text-[#1a73e8]'
                   : 'hover:bg-gray-200 text-gray-700'
               }`}
@@ -231,7 +510,7 @@ export default function Dashboard() {
 
           <button
             onClick={() => setShowNewCategory(true)}
-            className="w-full text-left px-4 py-2 rounded-r text-sm text-[#1a73e8] hover:bg-gray-200"
+            className="w-full text-left px-4 py-1.5 lg:py-2 rounded-r text-sm text-[#1a73e8] hover:bg-gray-200"
           >
             + New Category
           </button>
@@ -248,10 +527,35 @@ export default function Dashboard() {
       </div>
 
       {/* Main Content */}
-      <div className="flex-1 flex flex-col">
+      <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+        {/* Mobile Hamburger Menu */}
+        {selectedEmails.size === 0 && (
+          <div className="lg:hidden px-4 py-3 border-b border-[#dadce0] flex items-center">
+            <button
+              onClick={() => setIsSidebarOpen(true)}
+              className="text-gray-600 hover:text-gray-900 mr-3"
+              aria-label="Open menu"
+            >
+              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+              </svg>
+            </button>
+            <h1 className="text-lg font-normal text-gray-900">GutsMail</h1>
+          </div>
+        )}
+
         {/* Toolbar */}
         {selectedEmails.size > 0 && (
           <div className="px-4 py-2 border-b border-[#dadce0] flex items-center gap-4 bg-[#f0f0f0]">
+            <button
+              onClick={() => setIsSidebarOpen(true)}
+              className="lg:hidden text-gray-600 hover:text-gray-900"
+              aria-label="Open menu"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+              </svg>
+            </button>
             <span className="text-sm text-gray-600">{selectedEmails.size} selected</span>
             <button
               onClick={handleBulkDelete}
@@ -262,8 +566,16 @@ export default function Dashboard() {
             <button
               onClick={handleUnsubscribe}
               className="text-sm text-gray-700 hover:text-gray-900"
+              title="Open unsubscribe links in new tabs"
             >
               Unsubscribe
+            </button>
+            <button
+              onClick={handleAIUnsubscribe}
+              className="text-sm text-[#1a73e8] hover:text-[#1557b0] font-medium"
+              title="Use AI to automatically complete unsubscribe process"
+            >
+              🤖 AI Unsubscribe
             </button>
             <button
               onClick={() => setSelectedEmails(new Set())}
@@ -299,7 +611,7 @@ export default function Dashboard() {
             emails.map((email) => (
               <div
                 key={email.id}
-                className={`px-4 py-3 border-b border-[#dadce0] hover:bg-[#f5f5f5] cursor-pointer ${
+                className={`px-3 sm:px-4 py-3 border-b border-[#dadce0] hover:bg-[#f5f5f5] cursor-pointer ${
                   selectedEmails.has(email.id) ? 'bg-[#e8f0fe]' : ''
                 }`}
                 onClick={(e) => {
@@ -308,20 +620,20 @@ export default function Dashboard() {
                   }
                 }}
               >
-                <div className="flex items-start gap-3">
+                <div className="flex items-start gap-2 sm:gap-3">
                   <input
                     type="checkbox"
                     checked={selectedEmails.has(email.id)}
                     onChange={() => toggleEmailSelection(email.id)}
-                    className="mt-1"
+                    className="mt-1 flex-shrink-0"
                     onClick={(e) => e.stopPropagation()}
                   />
                   <div className="flex-1 min-w-0">
-                    <div className="flex items-center justify-between">
+                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1">
                       <span className="font-medium text-sm text-gray-900 truncate">
                         {email.fromName || email.from}
                       </span>
-                      <span className="text-xs text-gray-500 ml-2">
+                      <span className="text-xs text-gray-500 flex-shrink-0">
                         {new Date(email.date).toLocaleDateString()}
                       </span>
                     </div>
@@ -331,7 +643,7 @@ export default function Dashboard() {
                     <div className="text-sm text-gray-600 truncate mt-0.5">
                       {email.summary}
                     </div>
-                    <div className="flex items-center gap-2 mt-1">
+                    <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
                       {email.category && (
                         <span className="text-xs px-2 py-0.5 rounded" style={{ backgroundColor: email.category.color + '20', color: email.category.color }}>
                           {email.category.name}
@@ -366,6 +678,7 @@ export default function Dashboard() {
           }}
         />
       )}
+      </div>
     </div>
   );
 }
@@ -388,12 +701,13 @@ function NewCategoryModal({ onClose, onSuccess }: { onClose: () => void; onSucce
 
       if (res.ok) {
         onSuccess();
+        toast.success('Category created successfully');
       } else {
-        alert('Failed to create category');
+        toast.error('Failed to create category');
       }
     } catch (error) {
       console.error('Error creating category:', error);
-      alert('Failed to create category');
+      toast.error('Failed to create category');
     } finally {
       setLoading(false);
     }

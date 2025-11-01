@@ -24,7 +24,7 @@ export async function categorizeEmail(
     return null;
   }
 
-  const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+  const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
 
   const prompt = `You are an email categorization assistant. Analyze the email below and determine which category best matches it.
 
@@ -52,7 +52,7 @@ Respond with ONLY the category ID that best matches. If none match well, respond
 }
 
 export async function summarizeEmail(body: string, subject: string): Promise<string> {
-  const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+  const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
 
   const prompt = `Summarize this email in 1-2 concise sentences. Focus on the key message and any action items.
 
@@ -73,7 +73,7 @@ Provide a clear, actionable summary:`;
 }
 
 export async function calculatePriorityScore(email: Email): Promise<number> {
-  const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+  const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
 
   const prompt = `Analyze this email and rate its importance/priority on a scale of 0-100.
 
@@ -104,7 +104,7 @@ export async function detectImportantInfo(body: string): Promise<{
   hasImportant: boolean;
   flags: string[];
 }> {
-  const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+  const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
 
   const prompt = `Analyze this email and identify any important information that the user might need later.
 
@@ -122,15 +122,25 @@ Look for:
 Email content:
 ${body.slice(0, 2000)}
 
-Respond in JSON format like this:
-{"hasImportant": true/false, "flags": ["type1", "type2"]}`;
+Respond with ONLY valid JSON, no other text. Format:
+{"hasImportant": true, "flags": ["type1", "type2"]}
+
+or
+
+{"hasImportant": false, "flags": []}`;
 
   try {
     const result = await model.generateContent(prompt);
     const response = result.response.text().trim();
 
-    // Try to extract JSON from response
-    const jsonMatch = response.match(/\{[\s\S]*\}/);
+    // Try to extract JSON from response (handle markdown code blocks)
+    let jsonStr = response;
+
+    // Remove markdown code blocks if present
+    jsonStr = jsonStr.replace(/```json\n?/g, '').replace(/```\n?/g, '');
+
+    // Extract just the JSON object
+    const jsonMatch = jsonStr.match(/\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/);
     if (jsonMatch) {
       const parsed = JSON.parse(jsonMatch[0]);
       return {
@@ -155,7 +165,7 @@ export async function analyzeBulkDeleteSafety(emails: Array<{
   safeToDelete: string[];
   shouldReview: Array<{ id: string; reason: string }>;
 }> {
-  const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+  const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
 
   const emailList = emails.map((e, idx) =>
     `${idx + 1}. [ID: ${e.id}] From: ${e.from} | Subject: ${e.subject} | Snippet: ${e.snippet.slice(0, 100)}`
@@ -213,7 +223,7 @@ export async function generateSenderSummary(
   senderEmail: string,
   recentEmails: Array<{ subject: string; snippet: string }>
 ): Promise<string> {
-  const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+  const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
 
   const emailSamples = recentEmails.slice(0, 5).map((e, idx) =>
     `${idx + 1}. ${e.subject} - ${e.snippet.slice(0, 100)}`
@@ -233,4 +243,117 @@ Provide a concise, helpful description:`;
     console.error('Error generating sender summary:', error);
     return 'Regular sender';
   }
+}
+
+/**
+ * Combined AI analysis function that performs all email analysis in a single API call.
+ * This reduces API usage by 75% (from 4 calls per email to 1 call per email).
+ */
+export interface EmailAnalysisResult {
+  categoryId: string | null;
+  summary: string;
+  priorityScore: number;
+  importantInfo: {
+    hasImportant: boolean;
+    flags: string[];
+  };
+}
+
+export async function analyzeEmailComplete(
+  email: Email,
+  categories: Category[]
+): Promise<EmailAnalysisResult> {
+  const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
+
+  const categoriesText = categories.length > 0
+    ? categories.map((c, idx) => `${idx + 1}. ${c.name} (ID: ${c.id}): ${c.description}`).join('\n')
+    : 'No categories available';
+
+  const prompt = `You are an intelligent email analysis assistant. Analyze the email below and provide a comprehensive analysis.
+
+Email Details:
+Subject: ${email.subject}
+From: ${email.fromName || email.from}
+Snippet: ${email.snippet}
+Body: ${email.body.slice(0, 2000)}
+
+Available Categories:
+${categoriesText}
+
+Perform the following analysis:
+
+1. CATEGORIZATION: Determine which category best matches this email. Return the category ID, or "none" if no good match.
+
+2. SUMMARY: Create a 1-2 sentence summary focusing on the key message and any action items.
+
+3. PRIORITY SCORE: Rate the email's importance/priority on a scale of 0-100. Consider:
+   - Urgency and time sensitivity
+   - Sender importance
+   - Action required
+   - Potential consequences if ignored
+
+4. IMPORTANT INFORMATION: Identify any important information the user might need later:
+   - Tracking numbers
+   - Order confirmations
+   - Meeting dates/times
+   - Phone numbers
+   - Addresses
+   - Account numbers
+   - Confirmation codes
+   - Passwords or credentials
+   - Important deadlines
+
+Respond with ONLY valid JSON in this exact format, no other text:
+{
+  "categoryId": "category_id_or_none",
+  "summary": "Your concise summary here",
+  "priorityScore": 75,
+  "importantInfo": {
+    "hasImportant": true,
+    "flags": ["tracking_number", "meeting_datetime"]
+  }
+}`;
+
+  try {
+    const result = await model.generateContent(prompt);
+    const response = result.response.text().trim();
+
+    // Remove markdown code blocks if present
+    let jsonStr = response.replace(/```json\n?/g, '').replace(/```\n?/g, '');
+
+    // Extract just the JSON object
+    const jsonMatch = jsonStr.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      const parsed = JSON.parse(jsonMatch[0]);
+
+      // Validate and sanitize the response
+      const categoryId = parsed.categoryId === 'none' ? null : parsed.categoryId;
+      const validCategory = categories.find(c => c.id === categoryId);
+
+      return {
+        categoryId: validCategory ? validCategory.id : null,
+        summary: parsed.summary || 'Unable to generate summary',
+        priorityScore: typeof parsed.priorityScore === 'number'
+          ? Math.min(100, Math.max(0, parsed.priorityScore))
+          : 50,
+        importantInfo: {
+          hasImportant: parsed.importantInfo?.hasImportant || false,
+          flags: Array.isArray(parsed.importantInfo?.flags) ? parsed.importantInfo.flags : [],
+        },
+      };
+    }
+  } catch (error) {
+    console.error('Error in complete email analysis:', error);
+  }
+
+  // Return safe defaults on error
+  return {
+    categoryId: null,
+    summary: 'Unable to generate summary',
+    priorityScore: 50,
+    importantInfo: {
+      hasImportant: false,
+      flags: [],
+    },
+  };
 }

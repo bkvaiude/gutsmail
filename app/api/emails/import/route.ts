@@ -6,13 +6,47 @@ import {
   fetchRecentEmails,
   archiveEmail,
   extractUnsubscribeLink,
+  getGmailClientFromAccount,
+  fetchRecentEmailsFromClient,
+  archiveEmailWithClient,
 } from '@/lib/gmail';
 import {
-  categorizeEmail,
-  summarizeEmail,
-  calculatePriorityScore,
-  detectImportantInfo,
+  analyzeEmailComplete,
 } from '@/lib/gemini';
+
+// Utility function to sleep for a given duration
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+// Exponential backoff retry wrapper for API calls
+async function retryWithBackoff<T>(
+  fn: () => Promise<T>,
+  maxRetries = 5,
+  baseDelay = 1000
+): Promise<T> {
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (error: any) {
+      const is429 = error?.message?.includes('429') || error?.message?.includes('Resource exhausted');
+      const isLastAttempt = attempt === maxRetries - 1;
+
+      if (!is429 || isLastAttempt) {
+        throw error;
+      }
+
+      // Exponential backoff: 1s, 2s, 4s, 8s, 16s
+      const delay = baseDelay * Math.pow(2, attempt);
+      // Add jitter to prevent thundering herd
+      const jitter = Math.random() * 1000;
+      const totalDelay = delay + jitter;
+
+      console.log(`Rate limited (429). Retrying in ${Math.round(totalDelay / 1000)}s... (attempt ${attempt + 1}/${maxRetries})`);
+      await sleep(totalDelay);
+    }
+  }
+
+  throw new Error('Max retries exceeded');
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -30,114 +64,201 @@ export async function POST(request: NextRequest) {
       where: { userId: session.user.id },
     });
 
-    // Fetch emails from Gmail
-    const gmailMessages = await fetchRecentEmails(session.user.id, maxEmails);
+    // Fetch all active Gmail accounts
+    const gmailAccounts = await prisma.gmailAccount.findMany({
+      where: {
+        userId: session.user.id,
+        isActive: true,
+      },
+    });
+
+    // Fetch emails from all active Gmail accounts
+    let allGmailMessages: Array<{ message: any; accountId: string; gmailClient: any }> = [];
+
+    if (gmailAccounts.length > 0) {
+      console.log(`📬 Fetching emails from ${gmailAccounts.length} active Gmail account(s)...`);
+
+      for (const account of gmailAccounts) {
+        try {
+          console.log(`   📧 Fetching from ${account.email}...`);
+          const gmailClient = await getGmailClientFromAccount(account);
+          const messages = await fetchRecentEmailsFromClient(gmailClient, maxEmails);
+
+          // Add accountId and gmailClient to each message for later use
+          for (const message of messages) {
+            allGmailMessages.push({
+              message,
+              accountId: account.id,
+              gmailClient,
+            });
+          }
+
+          console.log(`   ✓ Found ${messages.length} emails from ${account.email}`);
+        } catch (error) {
+          console.error(`   ✗ Error fetching from ${account.email}:`, error);
+        }
+      }
+    } else {
+      // Fallback to main OAuth account if no GmailAccounts configured
+      console.log('📬 No Gmail accounts configured, using main OAuth account...');
+      const messages = await fetchRecentEmails(session.user.id, maxEmails);
+
+      // For backward compatibility, no accountId for these
+      for (const message of messages) {
+        allGmailMessages.push({
+          message,
+          accountId: '',
+          gmailClient: null,
+        });
+      }
+    }
+
+    console.log(`📧 Total emails fetched: ${allGmailMessages.length}`);
 
     let imported = 0;
     let skipped = 0;
     const errors: string[] = [];
 
-    for (const gmailMsg of gmailMessages) {
-      try {
-        // Check if email already exists
-        const existing = await prisma.email.findUnique({
-          where: { messageId: gmailMsg.id },
-        });
+    // Filter out emails that already exist
+    const newEmails = [];
+    for (const item of allGmailMessages) {
+      const existing = await prisma.email.findUnique({
+        where: { messageId: item.message.id },
+      });
 
-        if (existing) {
-          skipped++;
-          continue;
-        }
+      if (existing) {
+        skipped++;
+      } else {
+        newEmails.push(item);
+      }
+    }
 
-        // Categorize email
-        const categoryId = await categorizeEmail(
-          {
-            subject: gmailMsg.subject,
-            from: gmailMsg.from,
-            fromName: gmailMsg.fromName,
-            snippet: gmailMsg.snippet,
-            body: gmailMsg.body,
-          },
-          categories
-        );
+    console.log(`📧 Processing ${newEmails.length} new emails (${skipped} already exist)`);
 
-        // Generate summary
-        const summary = await summarizeEmail(gmailMsg.body, gmailMsg.subject);
+    // Process emails in batches to respect rate limits
+    // Free tier: 5 requests per minute
+    // Strategy: 4 emails per batch, 60s delay between batches
+    const BATCH_SIZE = 4;
+    const BATCH_DELAY_MS = 60000; // 60 seconds
 
-        // Calculate priority score
-        const priorityScore = await calculatePriorityScore({
-          subject: gmailMsg.subject,
-          from: gmailMsg.from,
-          fromName: gmailMsg.fromName,
-          snippet: gmailMsg.snippet,
-          body: gmailMsg.body,
-        });
+    for (let i = 0; i < newEmails.length; i += BATCH_SIZE) {
+      const batch = newEmails.slice(i, i + BATCH_SIZE);
+      const batchNum = Math.floor(i / BATCH_SIZE) + 1;
+      const totalBatches = Math.ceil(newEmails.length / BATCH_SIZE);
 
-        // Detect important information
-        const { hasImportant, flags } = await detectImportantInfo(gmailMsg.body);
+      console.log(`\n📦 Processing batch ${batchNum}/${totalBatches} (${batch.length} emails)`);
 
-        // Extract unsubscribe link
-        const unsubscribeLink = await extractUnsubscribeLink(
-          gmailMsg.body,
-          gmailMsg.htmlBody
-        );
+      // Process all emails in this batch in parallel
+      const batchPromises = batch.map(async (item) => {
+        const gmailMsg = item.message;
+        const gmailAccountId = item.accountId || null;
+        const gmailClient = item.gmailClient;
 
-        // Save email to database
-        await prisma.email.create({
-          data: {
-            messageId: gmailMsg.id,
-            threadId: gmailMsg.threadId,
-            subject: gmailMsg.subject,
-            from: gmailMsg.from,
-            fromName: gmailMsg.fromName,
-            to: gmailMsg.to,
-            date: gmailMsg.date,
-            snippet: gmailMsg.snippet,
-            body: gmailMsg.body,
-            htmlBody: gmailMsg.htmlBody,
-            summary,
-            unsubscribeLink,
-            categoryId,
-            aiPriorityScore: priorityScore,
-            hasImportantInfo: hasImportant,
-            importantInfoFlags: flags.length > 0 ? JSON.stringify(flags) : null,
-          },
-        });
+        try {
+          // Use combined AI analysis with retry logic
+          const analysis = await retryWithBackoff(() =>
+            analyzeEmailComplete(
+              {
+                subject: gmailMsg.subject,
+                from: gmailMsg.from,
+                fromName: gmailMsg.fromName,
+                snippet: gmailMsg.snippet,
+                body: gmailMsg.body,
+              },
+              categories
+            )
+          );
 
-        // Update or create sender profile
-        await prisma.senderProfile.upsert({
-          where: {
-            userId_email: {
+          // Extract unsubscribe link (no API call)
+          const unsubscribeLink = await extractUnsubscribeLink(
+            gmailMsg.body,
+            gmailMsg.htmlBody
+          );
+
+          // Save email to database
+          await prisma.email.create({
+            data: {
+              messageId: gmailMsg.id,
+              threadId: gmailMsg.threadId,
+              subject: gmailMsg.subject,
+              from: gmailMsg.from,
+              fromName: gmailMsg.fromName,
+              to: gmailMsg.to,
+              date: gmailMsg.date,
+              snippet: gmailMsg.snippet,
+              body: gmailMsg.body,
+              htmlBody: gmailMsg.htmlBody,
+              summary: analysis.summary,
+              unsubscribeLink,
+              categoryId: analysis.categoryId,
+              gmailAccountId: gmailAccountId,
+              aiPriorityScore: analysis.priorityScore,
+              hasImportantInfo: analysis.importantInfo.hasImportant,
+              importantInfoFlags: analysis.importantInfo.flags.length > 0
+                ? JSON.stringify(analysis.importantInfo.flags)
+                : null,
+            },
+          });
+
+          // Update or create sender profile
+          await prisma.senderProfile.upsert({
+            where: {
+              userId_email: {
+                userId: session.user.id,
+                email: gmailMsg.from,
+              },
+            },
+            create: {
               userId: session.user.id,
               email: gmailMsg.from,
+              name: gmailMsg.fromName,
+              totalEmails: 1,
+              lastEmailDate: gmailMsg.date,
             },
-          },
-          create: {
-            userId: session.user.id,
-            email: gmailMsg.from,
-            name: gmailMsg.fromName,
-            totalEmails: 1,
-            lastEmailDate: gmailMsg.date,
-          },
-          update: {
-            totalEmails: { increment: 1 },
-            lastEmailDate: gmailMsg.date,
-            name: gmailMsg.fromName,
-          },
-        });
+            update: {
+              totalEmails: { increment: 1 },
+              lastEmailDate: gmailMsg.date,
+              name: gmailMsg.fromName,
+            },
+          });
 
-        // Archive email in Gmail
-        try {
-          await archiveEmail(session.user.id, gmailMsg.id);
-        } catch (archiveError) {
-          console.error('Error archiving email:', archiveError);
-          // Don't fail the import if archiving fails
+          // Archive email in Gmail (configurable via env)
+          if (process.env.AUTO_ARCHIVE_EMAILS === 'true') {
+            try {
+              if (gmailClient) {
+                // Use client-based archive for multi-account support
+                await archiveEmailWithClient(gmailClient, gmailMsg.id);
+              } else {
+                // Fallback to userId-based archive for backward compatibility
+                await archiveEmail(session.user.id, gmailMsg.id);
+              }
+            } catch (archiveError) {
+              console.error('Error archiving email:', archiveError);
+              // Don't fail the import if archiving fails
+            }
+          }
+
+          console.log(`  ✅ ${gmailMsg.subject.slice(0, 50)}...`);
+          return { success: true };
+        } catch (error) {
+          console.error(`  ❌ Error processing "${gmailMsg.subject}":`, error);
+          errors.push(`Failed to process email: ${gmailMsg.subject}`);
+          return { success: false, error };
         }
+      });
 
-        imported++;
-      } catch (error) {
-        console.error('Error processing email:', error);
-        errors.push(`Failed to process email: ${gmailMsg.subject}`);
+      // Wait for all emails in this batch to complete
+      const results = await Promise.all(batchPromises);
+      const successCount = results.filter(r => r.success).length;
+      imported += successCount;
+
+      console.log(`✨ Batch ${batchNum} complete: ${successCount}/${batch.length} successful`);
+
+      // Add delay before next batch (unless this is the last batch)
+      const hasMoreBatches = i + BATCH_SIZE < newEmails.length;
+      if (hasMoreBatches) {
+        console.log(`⏳ Waiting 60 seconds before next batch to respect rate limits...`);
+        await sleep(BATCH_DELAY_MS);
       }
     }
 
@@ -165,6 +286,53 @@ export async function POST(request: NextRequest) {
         timeSavedMins: { increment: Math.floor(imported * 2) },
       },
     });
+
+    // Calculate and log statistics
+    if (imported > 0) {
+      const importedEmails = await prisma.email.findMany({
+        where: {
+          category: {
+            userId: session.user.id,
+          },
+          isDeleted: false,
+        },
+        select: {
+          aiPriorityScore: true,
+          hasImportantInfo: true,
+          categoryId: true,
+        },
+      });
+
+      const uncategorized = await prisma.email.findMany({
+        where: {
+          categoryId: null,
+          isDeleted: false,
+        },
+        select: {
+          aiPriorityScore: true,
+          hasImportantInfo: true,
+          categoryId: true,
+        },
+      });
+
+      const allEmails = [...importedEmails, ...uncategorized];
+
+      const high = allEmails.filter(e => (e.aiPriorityScore || 50) >= 70).length;
+      const medium = allEmails.filter(e => {
+        const score = e.aiPriorityScore || 50;
+        return score >= 40 && score < 70;
+      }).length;
+      const low = allEmails.filter(e => (e.aiPriorityScore || 50) < 40).length;
+      const important = allEmails.filter(e => e.hasImportantInfo).length;
+
+      console.log('\n📊 Email Import Statistics:');
+      console.log(`   Total Emails: ${allEmails.length}`);
+      console.log(`   🔴 High Priority: ${high}`);
+      console.log(`   🟡 Medium Priority: ${medium}`);
+      console.log(`   🟢 Low Priority: ${low}`);
+      console.log(`   ⭐ Important Info: ${important}`);
+      console.log('');
+    }
 
     return NextResponse.json({
       success: true,
