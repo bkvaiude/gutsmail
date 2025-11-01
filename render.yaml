@@ -1,12 +1,10 @@
-services:
-  # PostgreSQL Database
-  - type: pserv
-    name: gutsmail-db
-    env: docker
+databases:
+  - name: gutsmail-db
+    databaseName: gutsmail
     plan: free
     region: oregon
 
-  # Next.js Web Service
+services:
   - type: web
     name: gutsmail
     env: node
