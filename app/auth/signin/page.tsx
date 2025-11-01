@@ -8,11 +8,25 @@ export default function SignIn() {
       <div className="max-w-md w-full space-y-8 p-8">
         <div className="text-center">
           <h1 className="text-3xl font-normal text-gray-900 mb-2">
-            Email Intelligence
+            GutsMail
           </h1>
-          <p className="text-sm text-gray-600">
+          <p className="text-sm text-gray-600 mb-1">
             AI-powered email sorting and management
           </p>
+          <div className="text-xs text-gray-500 space-y-1">
+            <p>
+              Powered by{' '}
+              <a
+                href="https://highguts.com"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-blue-600 hover:text-blue-800 hover:underline"
+              >
+                Highguts Solution LLP
+              </a>
+            </p>
+            <p className="text-gray-400">One-Man Company • Individual Tech Consultant & Freelancer</p>
+          </div>
         </div>
 
         <div className="mt-8">
