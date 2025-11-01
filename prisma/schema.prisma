@@ -1,0 +1,154 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// NextAuth Models
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String?   @unique
+  emailVerified DateTime?
+  image         String?
+  createdAt     DateTime  @default(now())
+
+  accounts       Account[]
+  sessions       Session[]
+  categories     Category[]
+  insights       EmailInsight[]
+  senderProfiles SenderProfile[]
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// Core Application Models
+model Category {
+  id          String   @id @default(cuid())
+  userId      String
+  name        String
+  description String
+  color       String?  @default("#1a73e8")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  emails Email[]
+
+  @@index([userId])
+}
+
+model Email {
+  id              String   @id @default(cuid())
+  categoryId      String?
+  messageId       String   @unique
+  threadId        String
+  subject         String
+  from            String
+  fromName        String?
+  to              String
+  date            DateTime
+  snippet         String
+  body            String
+  htmlBody        String?
+  summary         String?
+  unsubscribeLink String?
+  isDeleted       Boolean  @default(false)
+
+  // Intelligence features
+  aiPriorityScore  Int?     @default(50)
+  hasImportantInfo Boolean  @default(false)
+  importantInfoFlags String? // JSON: tracking numbers, dates, etc
+  senderReputation Int?     @default(50)
+  openedAt         DateTime?
+
+  createdAt DateTime @default(now())
+
+  category Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+
+  @@index([categoryId])
+  @@index([date])
+  @@index([from])
+}
+
+// Intelligence & Analytics Models
+model EmailInsight {
+  id              String   @id @default(cuid())
+  userId          String
+  date            DateTime @default(now())
+
+  // Daily metrics
+  emailsProcessed  Int @default(0)
+  emailsArchived   Int @default(0)
+  emailsDeleted    Int @default(0)
+  timeSavedMins    Int @default(0)
+  topSender        String?
+  inboxHealthScore Int @default(50) // 0-100
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, date])
+}
+
+model SenderProfile {
+  id              String   @id @default(cuid())
+  userId          String
+  email           String
+  name            String?
+
+  // AI-generated insights
+  openRate        Float    @default(0.0)
+  replyRate       Float    @default(0.0)
+  importance      Int      @default(50) // 0-100
+  category        String?
+  lastEmailDate   DateTime?
+  totalEmails     Int      @default(0)
+  aiSummary       String?  // AI-generated sender description
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, email])
+  @@index([userId])
+}
