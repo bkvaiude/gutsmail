@@ -206,8 +206,7 @@ export async function POST(request: NextRequest) {
             });
           } else {
             console.log(`⏭️  Skipping duplicate email: ${gmailMsg.subject}`);
-            skipped++;
-            continue;
+            return { success: true, skipped: true };
           }
 
           // Update or create sender profile
@@ -259,10 +258,12 @@ export async function POST(request: NextRequest) {
 
       // Wait for all emails in this batch to complete
       const results = await Promise.all(batchPromises);
-      const successCount = results.filter(r => r.success).length;
+      const successCount = results.filter(r => r.success && !(r as any).skipped).length;
+      const skippedCount = results.filter(r => r.success && (r as any).skipped).length;
       imported += successCount;
+      skipped += skippedCount;
 
-      console.log(`✨ Batch ${batchNum} complete: ${successCount}/${batch.length} successful`);
+      console.log(`✨ Batch ${batchNum} complete: ${successCount}/${batch.length} successful, ${skippedCount} skipped`);
 
       // Add delay before next batch (unless this is the last batch)
       const hasMoreBatches = i + BATCH_SIZE < newEmails.length;
