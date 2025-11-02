@@ -58,15 +58,23 @@ export async function GET(request: NextRequest) {
       take: 10,
     });
 
-    // Get email stats
+    // Get email stats (only user's emails)
     const totalEmails = await prisma.email.count({
-      where: { isDeleted: false },
+      where: {
+        isDeleted: false,
+        gmailAccount: {
+          userId: session.user.id,
+        },
+      },
     });
 
     const highPriorityCount = await prisma.email.count({
       where: {
         isDeleted: false,
         aiPriorityScore: { gte: 70 },
+        gmailAccount: {
+          userId: session.user.id,
+        },
       },
     });
 
@@ -74,6 +82,9 @@ export async function GET(request: NextRequest) {
       where: {
         isDeleted: false,
         hasImportantInfo: true,
+        gmailAccount: {
+          userId: session.user.id,
+        },
       },
     });
 
