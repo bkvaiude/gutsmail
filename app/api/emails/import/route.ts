@@ -175,30 +175,40 @@ export async function POST(request: NextRequest) {
             gmailMsg.htmlBody
           );
 
-          // Save email to database
-          await prisma.email.create({
-            data: {
-              messageId: gmailMsg.id,
-              threadId: gmailMsg.threadId,
-              subject: gmailMsg.subject,
-              from: gmailMsg.from,
-              fromName: gmailMsg.fromName,
-              to: gmailMsg.to,
-              date: gmailMsg.date,
-              snippet: gmailMsg.snippet,
-              body: gmailMsg.body,
-              htmlBody: gmailMsg.htmlBody,
-              summary: analysis.summary,
-              unsubscribeLink,
-              categoryId: analysis.categoryId,
-              gmailAccountId: gmailAccountId,
-              aiPriorityScore: analysis.priorityScore,
-              hasImportantInfo: analysis.importantInfo.hasImportant,
-              importantInfoFlags: analysis.importantInfo.flags.length > 0
-                ? JSON.stringify(analysis.importantInfo.flags)
-                : null,
-            },
+          // Save email to database (skip if already exists)
+          const existingEmail = await prisma.email.findUnique({
+            where: { messageId: gmailMsg.id },
           });
+
+          if (!existingEmail) {
+            await prisma.email.create({
+              data: {
+                messageId: gmailMsg.id,
+                threadId: gmailMsg.threadId,
+                subject: gmailMsg.subject,
+                from: gmailMsg.from,
+                fromName: gmailMsg.fromName,
+                to: gmailMsg.to,
+                date: gmailMsg.date,
+                snippet: gmailMsg.snippet,
+                body: gmailMsg.body,
+                htmlBody: gmailMsg.htmlBody,
+                summary: analysis.summary,
+                unsubscribeLink,
+                categoryId: analysis.categoryId,
+                gmailAccountId: gmailAccountId,
+                aiPriorityScore: analysis.priorityScore,
+                hasImportantInfo: analysis.importantInfo.hasImportant,
+                importantInfoFlags: analysis.importantInfo.flags.length > 0
+                  ? JSON.stringify(analysis.importantInfo.flags)
+                  : null,
+              },
+            });
+          } else {
+            console.log(`⏭️  Skipping duplicate email: ${gmailMsg.subject}`);
+            skipped++;
+            continue;
+          }
 
           // Update or create sender profile
           await prisma.senderProfile.upsert({
