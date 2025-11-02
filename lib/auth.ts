@@ -3,8 +3,21 @@ import GoogleProvider from 'next-auth/providers/google';
 import { PrismaAdapter } from '@auth/prisma-adapter';
 import { prisma } from './prisma';
 
+// Custom adapter to filter out unsupported fields from Google OAuth
+const customAdapter = () => {
+  const baseAdapter = PrismaAdapter(prisma);
+  return {
+    ...baseAdapter,
+    linkAccount: async (account: any) => {
+      // Remove fields not in Prisma schema
+      const { refresh_token_expires_in, ...accountData } = account;
+      return baseAdapter.linkAccount!(accountData);
+    },
+  };
+};
+
 export const authOptions: NextAuthOptions = {
-  adapter: PrismaAdapter(prisma) as any,
+  adapter: customAdapter() as any,
   providers: [
     GoogleProvider({
       clientId: process.env.GOOGLE_CLIENT_ID!,
