@@ -82,8 +82,8 @@ export default function InsightsDashboard() {
           >
             Back to inbox
           </button>
-          <h1 className="text-3xl font-normal text-gray-900">Email Intelligence Dashboard</h1>
-          <p className="text-gray-600 mt-1">AI-powered insights about your email habits</p>
+          <h1 className="text-3xl font-normal text-gray-900">HighGuts Insights Dashboard</h1>
+          <p className="text-gray-600 mt-1">AI-powered email intelligence by HighGuts Solutions</p>
         </div>
 
         {/* Key Metrics */}
@@ -96,7 +96,7 @@ export default function InsightsDashboard() {
           />
           <MetricCard
             title="Time Saved This Week"
-            value={`${Math.floor(insights?.weekly.timeSavedMins || 0 / 60)}h ${(insights?.weekly.timeSavedMins || 0) % 60}m`}
+            value={`${Math.floor((insights?.weekly.timeSavedMins || 0) / 60)}h ${(insights?.weekly.timeSavedMins || 0) % 60}m`}
             className="bg-blue-100 text-blue-600"
             description="By auto-archiving emails"
           />
@@ -159,7 +159,7 @@ export default function InsightsDashboard() {
             </div>
             <div>
               <div className="text-3xl font-semibold text-gray-900">
-                {Math.floor((insights?.weekly.timeSavedMins || 0) / 60)}h
+                {Math.floor((insights?.weekly.timeSavedMins || 0) / 60)}h {(insights?.weekly.timeSavedMins || 0) % 60}m
               </div>
               <div className="text-sm text-gray-600">Time Saved</div>
             </div>
