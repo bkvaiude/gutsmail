@@ -18,6 +18,9 @@ export async function GET(request: NextRequest) {
 
     const where: any = {
       isDeleted: false,
+      gmailAccount: {
+        userId: session.user.id,
+      },
     };
 
     // Category filter

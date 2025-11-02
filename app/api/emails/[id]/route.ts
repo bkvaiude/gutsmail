@@ -26,11 +26,21 @@ export async function GET(
             color: true,
           },
         },
+        gmailAccount: {
+          select: {
+            userId: true,
+          },
+        },
       },
     });
 
     if (!email) {
       return NextResponse.json({ error: 'Email not found' }, { status: 404 });
+    }
+
+    // Verify ownership
+    if (email.gmailAccount?.userId !== session.user.id) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 403 });
     }
 
     // Mark as opened

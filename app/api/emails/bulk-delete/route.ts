@@ -19,10 +19,13 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Email IDs required' }, { status: 400 });
     }
 
-    // Fetch emails
+    // Fetch emails (only user's own emails)
     const emails = await prisma.email.findMany({
       where: {
         id: { in: emailIds },
+        gmailAccount: {
+          userId: session.user.id,
+        },
       },
       select: {
         id: true,

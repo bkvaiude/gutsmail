@@ -32,6 +32,9 @@ export async function GET() {
       where: {
         categoryId: null,
         isDeleted: false,
+        gmailAccount: {
+          userId: session.user.id,
+        },
       },
       select: {
         id: true,
