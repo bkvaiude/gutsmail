@@ -83,8 +83,55 @@ export const authOptions: NextAuthOptions = {
       console.log('🔑 [AUTH] Account:', { provider: account?.provider, type: account?.type });
       console.log('📝 [AUTH] Profile email:', profile?.email);
 
-      // Allow sign-in even if account is not linked yet
-      // NextAuth will handle linking the account
+      // Auto-create GmailAccount for the user's OAuth email
+      if (account?.provider === 'google' && user.email && account.access_token) {
+        try {
+          const existingGmailAccount = await prisma.gmailAccount.findUnique({
+            where: {
+              userId_email: {
+                userId: user.id,
+                email: user.email,
+              },
+            },
+          });
+
+          if (!existingGmailAccount) {
+            console.log('📧 [AUTH] Auto-creating GmailAccount for:', user.email);
+            await prisma.gmailAccount.create({
+              data: {
+                userId: user.id,
+                email: user.email,
+                accessToken: account.access_token,
+                refreshToken: account.refresh_token,
+                expiresAt: account.expires_at,
+                isActive: true,
+              },
+            });
+            console.log('✅ [AUTH] GmailAccount created successfully');
+          } else {
+            // Update tokens if account already exists
+            console.log('🔄 [AUTH] Updating GmailAccount tokens for:', user.email);
+            await prisma.gmailAccount.update({
+              where: {
+                userId_email: {
+                  userId: user.id,
+                  email: user.email,
+                },
+              },
+              data: {
+                accessToken: account.access_token,
+                refreshToken: account.refresh_token,
+                expiresAt: account.expires_at,
+                isActive: true,
+              },
+            });
+            console.log('✅ [AUTH] GmailAccount tokens updated');
+          }
+        } catch (error: any) {
+          console.error('❌ [AUTH] Failed to create/update GmailAccount:', error.message);
+        }
+      }
+
       return true;
     },
     async session({ session, user }) {
