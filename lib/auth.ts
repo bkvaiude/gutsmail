@@ -73,6 +73,7 @@ export const authOptions: NextAuthOptions = {
           prompt: 'consent',
         },
       },
+      allowDangerousEmailAccountLinking: true,
     }),
   ],
   callbacks: {
@@ -81,6 +82,9 @@ export const authOptions: NextAuthOptions = {
       console.log('👤 [AUTH] User:', { id: user.id, email: user.email, name: user.name });
       console.log('🔑 [AUTH] Account:', { provider: account?.provider, type: account?.type });
       console.log('📝 [AUTH] Profile email:', profile?.email);
+
+      // Allow sign-in even if account is not linked yet
+      // NextAuth will handle linking the account
       return true;
     },
     async session({ session, user }) {
