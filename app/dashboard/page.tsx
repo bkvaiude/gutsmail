@@ -1,8 +1,8 @@
 'use client';
 
 import { useSession, signOut } from 'next-auth/react';
-import { useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { useEffect, useState, Suspense } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import toast from 'react-hot-toast';
 
 interface Category {
@@ -50,9 +50,10 @@ interface GmailAccount {
   createdAt: string;
 }
 
-export default function Dashboard() {
+function DashboardContent() {
   const { data: session, status } = useSession();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [categories, setCategories] = useState<Category[]>([]);
   const [emails, setEmails] = useState<Email[]>([]);
   const [stats, setStats] = useState<Stats | null>(null);
@@ -65,6 +66,36 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(false);
   const [importing, setImporting] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+
+  // Handle OAuth callback messages
+  useEffect(() => {
+    const success = searchParams.get('success');
+    const error = searchParams.get('error');
+    const email = searchParams.get('email');
+
+    if (success === 'account_added') {
+      toast.success(`Gmail account ${email || ''} added successfully`);
+      loadGmailAccounts();
+      // Clean up URL
+      router.replace('/dashboard');
+    } else if (success === 'account_updated') {
+      toast.success(`Gmail account ${email || ''} updated successfully`);
+      loadGmailAccounts();
+      router.replace('/dashboard');
+    } else if (error) {
+      const errorMessages: Record<string, string> = {
+        oauth_failed: 'OAuth authentication failed',
+        missing_params: 'Missing required parameters',
+        invalid_state: 'Invalid state parameter',
+        token_exchange_failed: 'Failed to exchange tokens',
+        userinfo_failed: 'Failed to fetch user info',
+        server_error: 'Server error occurred',
+        unauthorized: 'You must be logged in',
+      };
+      toast.error(errorMessages[error] || 'An error occurred');
+      router.replace('/dashboard');
+    }
+  }, [searchParams]);
 
   useEffect(() => {
     if (status === 'unauthenticated') {
@@ -267,23 +298,9 @@ export default function Dashboard() {
     setSelectedEmails(newSelected);
   };
 
-  const handleConnectAccount = async () => {
-    try {
-      const res = await fetch('/api/gmail-accounts', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-      });
-      if (res.ok) {
-        toast.success('Gmail account connected');
-        loadGmailAccounts();
-      } else {
-        const error = await res.json();
-        toast.error(error.error || 'Failed to connect account');
-      }
-    } catch (error) {
-      console.error('Error connecting account:', error);
-      toast.error('Failed to connect account');
-    }
+  const handleConnectAccount = () => {
+    // Redirect to OAuth flow for adding a new Gmail account
+    window.location.href = '/api/auth/add-account';
   };
 
   const handleToggleAccount = async (id: string, isActive: boolean) => {
@@ -757,5 +774,13 @@ function NewCategoryModal({ onClose, onSuccess }: { onClose: () => void; onSucce
         </form>
       </div>
     </div>
+  );
+}
+
+export default function Dashboard() {
+  return (
+    <Suspense fallback={<div className="flex items-center justify-center min-h-screen">Loading...</div>}>
+      <DashboardContent />
+    </Suspense>
   );
 }
